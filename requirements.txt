@@ -1,4 +1,4 @@
-# Install torch/torchvision first from https://pytorch.org/get-started/locally/ (CPU or CUDA build, matched pair)
+# Install torch + torchvision first (pick CPU or CUDA at https://pytorch.org/get-started/locally/)
 numpy
 pandas
 nibabel
@@ -6,6 +6,6 @@ scikit-learn
 matplotlib
 joblib
 pyyaml
+openpyxl
 streamlit
-psutil
 pytest

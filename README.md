@@ -1,55 +1,57 @@
 # Dementia MRI: CNN-ViT feature fusion (OASIS-1)
 
-Predicts the recorded CDR group (0 vs >0) from frozen ResNet-18 / ViT-B/16 slice features, compares CNN, ViT and fusion
-at 4/8/16 axial slices, measures compute cost, and ships a local Streamlit demo. Academic prototype; not a diagnosis.
-Design notes: [docs/DECISIONS.md](docs/DECISIONS.md), [docs/IMPLEMENTATION_AND_TRAINING.md](docs/IMPLEMENTATION_AND_TRAINING.md).
+Predicts the recorded CDR group (CDR 0 vs CDR > 0) from a brain MRI. Frozen ImageNet ResNet-18 and ViT-B/16
+turn 4/8/16 axial slices into features; only a logistic regression is trained. Academic prototype, not a diagnosis.
 
-## 1. Setup (run from this folder, PowerShell)
+```
+dementia_project/
+├── config.yaml          all settings (paths, cohort, slices, experiments)
+├── run.py               pipeline entry point
+├── app.py               Streamlit demo
+├── dementia/
+│   ├── data.py          scans + clinical labels -> cohort -> 80/20 split + CV folds
+│   ├── preprocess.py    MRI -> normalised axial slices -> 224x224 model input
+│   ├── features.py      frozen encoders, cached features, mean pooling, fusion
+│   ├── train.py         scaler + logistic regression, C tuned by CV, model selection
+│   ├── evaluate.py      held-out metrics, bootstrap CIs, ROC
+│   └── predict.py       single-scan prediction + timing benchmark
+├── tests/               synthetic checks
+└── outputs/             generated (git-ignored)
+```
+
+## What is trained
+| Part | Trained? |
+|---|---|
+| ResNet-18 (512-d per slice), ViT-B/16 (768-d per slice) | No, frozen |
+| Mean of slice features per participant; fusion = concat (1280-d) | No, fixed |
+| StandardScaler + class-balanced L2 logistic regression | Yes, C chosen by 5-fold CV ROC-AUC on dev only |
+| Age-only logistic regression | Yes, baseline |
+
+Models: {cnn, vit, fusion} x {4, 8, 16 slices} = 9, plus age_only. Set in `config.yaml`.
+
+## Run
 ```powershell
-python -m venv .venv
 .\.venv\Scripts\Activate.ps1
-python -m pip install --upgrade pip
-python -m pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu   # or the CUDA build from pytorch.org
+python -m pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu   # if not installed
 python -m pip install -r requirements.txt
-python -m pip install -e .
-python -m pip freeze > requirements-lock.txt
-python -m pytest            # synthetic tests
+python -m pytest -q
+
+python run.py prepare                    # outputs/participants.csv, exclusions.csv, prepare_summary.json
+python run.py qc                         # outputs/qc/*.png - check slices look right
+python run.py extract --limit 5          # pilot: prints seconds per participant
+python run.py extract                    # all dev participants, CNN + ViT (resumable)
+python run.py train                      # outputs/results/dev_cv_results.csv; locks models
+python run.py extract --split test       # test features, only allowed after train
+python run.py evaluate                   # ONCE: test_metrics.csv, test_roc.png, paired_auc_differences.csv
+python run.py benchmark                  # outputs/results/timings.csv
+python run.py predict --image "..\oasis_cross-sectional_disc1\disc1\OAS1_0001_MR1\PROCESSED\MPRAGE\T88_111\OAS1_0001_MR1_mpr_n4_anon_111_t88_masked_gfc.hdr"
+streamlit run app.py
 ```
+Or everything in one go: `python run.py all`.
 
-## 2. Data
-Paths are in `configs/base.yaml` and already point at the discs and spreadsheet one level above this folder:
-`../oasis_cross-sectional_disc*/` and `../oasis_cross-sectional-5708aa0a98d82080.xlsx` (xlsx or csv both work).
-Extract ALL discs first. Only discs 1-6 are extracted now (94 of 198 eligible participants).
+Quick CNN-only run: set `representations: [cnn]` and `budgets: [16]` in `config.yaml`.
 
-## 3. Run (baseline: CNN-16 + age-only)
-```powershell
-dementia prepare                           # inventory, cohort, 80/20 split, CV folds -> outputs/manifests
-dementia inspect                           # optional: QC montage in outputs/qc (orientation/slices are preset, see config)
-dementia extract --encoder cnn --limit 5   # pilot; prints seconds per participant
-dementia extract --encoder cnn             # all development participants
-dementia train                             # CV on development only; locks the run
-dementia extract --encoder cnn --split test
-dementia evaluate                          # ONCE; metrics, CIs, ROC -> outputs/results
-dementia benchmark --subjects 2 --repeats 2
-dementia predict --image "<path to *_t88_masked_gfc.hdr>"
-streamlit run app/app.py
-```
-
-## 4. Full comparison (9 configs + age baseline), only if the ViT pilot time is acceptable
-```powershell
-dementia --config configs/full.yaml prepare
-dementia --config configs/full.yaml extract --encoder cnn
-dementia --config configs/full.yaml extract --encoder vit --limit 5    # time it first
-dementia --config configs/full.yaml extract --encoder vit
-dementia --config configs/full.yaml train --full
-dementia --config configs/full.yaml extract --encoder cnn --split test
-dementia --config configs/full.yaml extract --encoder vit --split test
-dementia --config configs/full.yaml evaluate
-dementia --config configs/full.yaml benchmark
-$env:DEMENTIA_CONFIG = "configs/full.yaml"; streamlit run app/app.py
-```
-Use a new `output_dir` per protocol (full.yaml uses `outputs_full`). `train` locks a run; `evaluate` runs once.
-If you add discs after `prepare`, rerun `dementia prepare --force` BEFORE `train` (feature caches are reused if still valid).
-
-## Data policy
-OASIS scans, clinical tables and all participant-level outputs are git-ignored. Never commit them.
+## Rules
+- Split is by participant; the test set is used once, after `train` locks the models.
+- `prepare` can be rerun (e.g. after extracting more discs) until `train` runs. To start over, change `output_dir`.
+- Extract ALL OASIS discs before the real run; discs 1-6 give only 94 of the 198 eligible participants.

@@ -48,18 +48,14 @@ Experiments: CNN, ViT, Fusion x 4/8/16 slices = 9, plus the age baseline. Baseli
 
 | # | Build | Command | Done when |
 |---|---|---|---|
-| 1 | `config.py`, `inventory.py` | `dementia prepare` (inventory part) | Scan count matches disk; missing .hdr/.img pairs reported |
-| 2 | `manifest.py`, `splits.py` | `dementia prepare` | One row per participant, exclusions logged, no train/test overlap, counts per class printed |
-| 3 | `io.py`, `qc.py` | `dementia inspect` | Three-plane montages look right; set `geometry` fields and `verified: true` |
-| 4 | `slices.py`, `preprocess.py` | | 16 unique in-bounds indices chosen from development previews only |
-| 5 | `encoders.py`, `extract.py` | `dementia extract --encoder cnn --limit 5` | 5 files of shape (16,512); measured seconds per participant |
-| 6 | `pooling.py`, `train.py`, `select.py` | `dementia train` | Dev CV table, saved pipelines, `lock.json` |
-| 7 | `metrics.py`, `bootstrap.py`, `evaluate.py` | `extract --split test`, `evaluate` | One prediction per test participant, CIs, ROC plot |
-| 8 | `predict.py`, `app/app.py` | `streamlit run app/app.py` | App score equals offline score |
-| 9 | `benchmark.py` | `dementia benchmark` | Timing CSVs and hardware log |
-| 10 | ViT + `--full` | | Only if the ViT pilot time leaves room |
+| 1 | `dementia/data.py` | `python run.py prepare` | One row per participant, exclusions logged, no train/test overlap, counts per class printed |
+| 2 | `dementia/preprocess.py` | `python run.py qc` | Slice montages upright, brain in view (orientation and slices are preset in `config.yaml`) |
+| 3 | `dementia/features.py` | `python run.py extract --limit 5` | Files of shape (16,512)/(16,768); measured seconds per participant |
+| 4 | `dementia/train.py` | `python run.py train` | Dev CV table, saved pipelines, `lock.json` |
+| 5 | `dementia/evaluate.py` | `run.py extract --split test`, `run.py evaluate` | One prediction per test participant, CIs, ROC plot |
+| 6 | `dementia/predict.py`, `app.py` | `run.py benchmark`, `streamlit run app.py` | Timings CSV; app score equals offline score |
 
-Tests (synthetic only): participant disjointness, class presence in each fold, pooling shapes, cache invalidation on config change.
+Tests (synthetic only, `python -m pytest`): participant disjointness, class presence in each fold, cohort rules, pooling shapes, model selection.
 
 ## 5. Rules that protect the result
 
