@@ -1,0 +1,11 @@
+# Install torch/torchvision first from https://pytorch.org/get-started/locally/ (CPU or CUDA build, matched pair)
+numpy
+pandas
+nibabel
+scikit-learn
+matplotlib
+joblib
+pyyaml
+streamlit
+psutil
+pytest

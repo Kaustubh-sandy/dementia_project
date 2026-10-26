@@ -1,0 +1,24 @@
+# data & participant-level outputs (OASIS data-use agreement)
+data/raw/*
+data/metadata/*
+outputs/*
+*.hdr
+*.img
+*.nii
+*.nii.gz
+*.npz
+*.joblib
+*.tar.gz
+*.zip
+*.xlsx
+# env / python
+.venv/
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+*.egg-info/
+.pytest_cache/
+.env
+!data/**/.gitkeep
+!requirements*.txt
+outputs_full/
