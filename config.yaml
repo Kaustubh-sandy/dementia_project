@@ -1,8 +1,8 @@
 # All settings for the pipeline. Paths are relative to this file's folder.
 seed: 42
-data_root: '..'                                   # folder holding oasis_cross-sectional_disc*
+data_root: '../DATASET'                           # folder holding oasis_cross-sectional_disc*
 image_glob: 'oasis_cross-sectional_disc*/**/T88_111/*_t88_masked_gfc.hdr'
-clinical_file: '../oasis_cross-sectional-5708aa0a98d82080.xlsx'   # .xlsx or .csv with ID, Age, CDR
+clinical_file: '../DATASET/oasis_cross-sectional-5708aa0a98d82080.xlsx'   # .xlsx or .csv with ID, Age, CDR
 output_dir: 'outputs'
 
 # Cohort: age >= 60, valid CDR, earliest session per participant. Label = CDR > 0.
@@ -27,9 +27,13 @@ image_size: 224
 device: auto            # auto | cpu | cuda
 batch_size: 4
 
-# Experiments: every representation x budget, plus an age-only baseline.
-# For a quick CNN-only run use: representations: [cnn], budgets: [16]
-representations: [cnn, vit, fusion]
-budgets: [4, 8, 16]
+# Which models to train. age_only is always added as a baseline. Override with `run.py train --suite full`.
+#   review: CNN-16, ViT-16, fusion-16       full: all three at 4, 8, 16 slices       cnn: CNN-16 only
+suite: review
+suites:
+  review: {representations: [cnn, vit, fusion], budgets: [16]}
+  full: {representations: [cnn, vit, fusion], budgets: [4, 8, 16]}
+  cnn: {representations: [cnn], budgets: [16]}
 C_grid: [0.001, 0.01, 0.1, 1.0]
+threshold: 0.5
 bootstrap: 2000

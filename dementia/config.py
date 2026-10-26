@@ -9,6 +9,7 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 FEATURE_DIMS = {"cnn": 512, "vit": 768}
+ENCODERS_FOR = {"cnn": ["cnn"], "vit": ["vit"], "fusion": ["cnn", "vit"]}
 
 
 class Config(dict):
@@ -32,6 +33,14 @@ class Config(dict):
 
     def budget_indices(self, budget) -> list[int]:
         return [self["slice_indices"][p] for p in self.positions(budget)]
+
+    def experiments(self, suite: str | None = None) -> list[tuple[str, int]]:
+        """(representation, budget) pairs of a suite; age_only is added by train()."""
+        s = self["suites"][suite or self["suite"]]
+        return [(r, int(b)) for r in s["representations"] for b in s["budgets"]]
+
+    def encoders(self, suite: str | None = None) -> list[str]:
+        return sorted({e for r, _ in self.experiments(suite) for e in ENCODERS_FOR[r]})
 
     def device(self) -> str:
         if self["device"] != "auto":

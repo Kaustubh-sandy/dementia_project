@@ -6,17 +6,17 @@ Academic prototype. Predicts the recorded CDR group (0 vs >0) from a brain MRI. 
 
 | Item | Finding |
 |---|---|
-| Scan to use | `discN/discN/OAS1_xxxx_MRy/PROCESSED/MPRAGE/T88_111/*_t88_masked_gfc.hdr` + `.img` |
+| Scan to use | `DATASET/oasis_cross-sectional_discN/discN/OAS1_xxxx_MRy/PROCESSED/MPRAGE/T88_111/*_t88_masked_gfc.hdr` + `.img` |
 | Note | There is an extra `MPRAGE/` level versus the guides. `n4` in the name varies, so the glob matches only the suffix: `**/T88_111/*_t88_masked_gfc.hdr` |
 | Image | 176x208x176, 1 mm, atlas-aligned, skull removed, 16-bit big-endian Analyze 7.5 (fact sheet Table 1) |
 | Not used | `RAW/`, `SUBJ_111/`, `*_t88_gfc` (has skull), `FSL_SEG/` (labels), `t4_files/`, `.txt`/`.xml` (same info as the spreadsheet) |
-| Layout | No need to merge discs. `data_root: '..'` plus a recursive glob finds every session; each is joined to the spreadsheet by session ID |
-| Spreadsheet | `oasis_cross-sectional-5708aa0a98d82080.xlsx`, 436 rows: ID, M/F, Hand, Age, Educ, SES, MMSE, CDR, eTIV, nWBV, ASF, Delay. Under-60 CDR is `N/A` |
+| Layout | No need to merge discs. `data_root: '../DATASET'` plus a recursive glob finds every session; each is joined to the spreadsheet by session ID |
+| Spreadsheet | `DATASET/oasis_cross-sectional-5708aa0a98d82080.xlsx`, 436 rows: ID, M/F, Hand, Age, Educ, SES, MMSE, CDR, eTIV, nWBV, ASF, Delay. Under-60 CDR is `N/A` |
 | Full cohort (age >= 60) | 198: CDR 0 = 98, 0.5 = 70, 1 = 28, 2 = 2 (matches fact sheet Table 2) |
 | On disk today | Discs 1-6 extracted = 223 scans, of which **94 are eligible** (48 CDR 0, 46 CDR > 0). Disc 7 is still downloading (`.crdownload`); remaining discs are needed to reach 198 |
 
 Do not run the real study on the partial 94. Use them for the pipeline pilot, QC and slice choice, then run `prepare` once all discs are extracted.
-Convert the xlsx to `data/metadata/oasis_cross-sectional.csv` (needs `openpyxl` in the venv).
+The pipeline reads the xlsx directly (needs `openpyxl`, listed in requirements.txt).
 
 ## 2. What is trained, what is not
 
@@ -49,7 +49,7 @@ Experiments: CNN, ViT, Fusion x 4/8/16 slices = 9, plus the age baseline. Baseli
 | # | Build | Command | Done when |
 |---|---|---|---|
 | 1 | `dementia/data.py` | `python run.py prepare` | One row per participant, exclusions logged, no train/test overlap, counts per class printed |
-| 2 | `dementia/preprocess.py` | `python run.py qc` | Slice montages upright, brain in view (orientation and slices are preset in `config.yaml`) |
+| 2 | `dementia/preprocess.py` | `python run.py audit` | Slice montages upright, brain in view (orientation and slices are preset in `config.yaml`) |
 | 3 | `dementia/features.py` | `python run.py extract --limit 5` | Files of shape (16,512)/(16,768); measured seconds per participant |
 | 4 | `dementia/train.py` | `python run.py train` | Dev CV table, saved pipelines, `lock.json` |
 | 5 | `dementia/evaluate.py` | `run.py extract --split test`, `run.py evaluate` | One prediction per test participant, CIs, ROC plot |

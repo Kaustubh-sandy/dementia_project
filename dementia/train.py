@@ -1,6 +1,7 @@
-"""Train scaler + logistic regression for every representation x budget, plus age-only (step: train)."""
+"""Train scaler + logistic regression for each suite model plus age-only, then lock (step: train)."""
 from __future__ import annotations
 
+import hashlib
 import json
 from datetime import datetime
 
@@ -13,7 +14,7 @@ from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
 from dementia.data import load_participants
-from dementia.features import ENCODERS_FOR, build_matrix, load_features
+from dementia.features import build_matrix, load_features
 
 REP_RANK = {"cnn": 0, "vit": 1, "fusion": 2}
 
@@ -36,16 +37,37 @@ def select_best(results: list[dict]) -> dict:
     return min(mri, key=lambda r: (-round(r["cv_auc"], 9), REP_RANK[r["representation"]], r["budget"]))
 
 
-def train(cfg) -> pd.DataFrame:
+def lock_payload(cfg, encoders) -> dict:
+    """Everything the held-out evaluation depends on; any change after training breaks the lock."""
+    return {
+        "participants_sha256": hashlib.sha256(cfg.out("participants.csv").read_bytes()).hexdigest(),
+        "feature_hashes": {e: cfg.feature_hash(e) for e in encoders},
+        "slice_budgets": {str(k): v for k, v in cfg["slice_budgets"].items()},
+        "threshold": cfg["threshold"],
+    }
+
+
+def check_lock(cfg) -> dict:
+    path = cfg.out("models", "lock.json")
+    if not path.exists():
+        raise SystemExit("Models are not trained/locked yet: run `python run.py train` first")
+    lock = json.loads(path.read_text())
+    if {k: lock[k] for k in lock_payload(cfg, lock["encoders"])} != lock_payload(cfg, lock["encoders"]):
+        raise SystemExit("participants.csv, slices, geometry or threshold changed since training. Restore them.")
+    return lock
+
+
+def train(cfg, suite: str | None = None) -> pd.DataFrame:
+    suite = suite or cfg["suite"]
     lock = cfg.out("models", "lock.json")
     if lock.exists():
         raise SystemExit("Models are already locked for this output_dir. Change output_dir to start a new run.")
     dev = load_participants(cfg, "dev")
     y, folds = dev.label.to_numpy(), dev.fold.to_numpy()
-    encoders = sorted({e for r in cfg["representations"] for e in ENCODERS_FOR[r]})
+    encoders = cfg.encoders(suite)
     feats = {e: load_features(cfg, e, dev.subject_id) for e in encoders}
 
-    jobs = [(f"{r}_{b}", r, int(b), cfg.positions(b)) for r in cfg["representations"] for b in cfg["budgets"]]
+    jobs = [(f"{r}_{b}", r, b, cfg.positions(b)) for r, b in cfg.experiments(suite)]
     jobs.append(("age_only", "age", 0, None))
     results = []
     for name, rep, budget, pos in jobs:
@@ -55,6 +77,7 @@ def train(cfg) -> pd.DataFrame:
             {"name": name, "representation": rep, "budget": budget, "positions": pos, "pipeline": search.best_estimator_},
             cfg.out("models", f"{name}.joblib"),
         )
+        pd.DataFrame(search.cv_results_).to_csv(cfg.out("results", f"cv_{name}.csv"), index=False)
         i = search.best_index_
         results.append(
             {
@@ -73,6 +96,20 @@ def train(cfg) -> pd.DataFrame:
     table = pd.DataFrame(results)
     table.to_csv(cfg.out("results", "dev_cv_results.csv"), index=False)
     cfg.out("models", "experiments.json").write_text(json.dumps(results, indent=2))
-    lock.write_text(json.dumps({"locked_at": datetime.now().isoformat(), "selected": best["name"]}, indent=2))
-    print(f"\n[train] selected model for the app: {best['name']} (dev CV AUC {best['cv_auc']:.3f}; not a final estimate)")
+    lock.write_text(
+        json.dumps(
+            {
+                "locked_at": datetime.now().isoformat(),
+                "suite": suite,
+                "selected": best["name"],
+                "selection_rule": "highest dev CV AUC; ties: cnn < vit < fusion, then fewer slices",
+                "encoders": encoders,
+                "n_dev": len(dev),
+                "cv_folds": int(np.unique(folds).size),
+                **lock_payload(cfg, encoders),
+            },
+            indent=2,
+        )
+    )
+    print(f"\n[train] suite={suite}; selected model for the app: {best['name']} (dev CV AUC {best['cv_auc']:.3f}; not a final estimate)")
     return table

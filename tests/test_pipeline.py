@@ -2,13 +2,14 @@
 import numpy as np
 import pandas as pd
 import pytest
+import yaml
 
-from dementia.config import Config
+from dementia.config import ROOT, Config
 from dementia.data import make_splits, select_cohort
-from dementia.evaluate import bootstrap_ci, compute_metrics, paired_auc_difference
+from dementia.evaluate import bootstrap_ci, compute_metrics, evaluate, paired_auc_difference
 from dementia.features import build_matrix, pool
 from dementia.preprocess import extract_slices, normalise_volume
-from dementia.train import fit_model, select_best
+from dementia.train import check_lock, fit_model, select_best, train
 
 
 def test_split_is_disjoint_stratified_and_deterministic():
@@ -85,11 +86,54 @@ def test_metrics_and_bootstrap():
     assert paired_auc_difference(y, s, 1 - s, 200)["auc_difference"] > 0
 
 
-def test_config_budgets_nested():
+def test_config_suites_and_budgets():
     cfg = Config()
     b = {k: set(cfg.positions(k)) for k in cfg["slice_budgets"]}
     assert b[4] <= b[8] <= b[16] and len(set(cfg["slice_indices"])) == 16
     assert cfg.budget_indices(4) == [41, 65, 107, 131]
+    assert cfg.experiments("review") == [("cnn", 16), ("vit", 16), ("fusion", 16)]
+    assert len(cfg.experiments("full")) == 9
+    assert cfg.encoders("cnn") == ["cnn"] and cfg.encoders("review") == ["cnn", "vit"]
+
+
+@pytest.fixture
+def synthetic_run(tmp_path):
+    """A config whose output_dir holds a fake manifest and fake cached features (no MRI, no torch)."""
+    raw = yaml.safe_load((ROOT / "config.yaml").read_text())
+    raw.update(output_dir=str(tmp_path / "out"), bootstrap=100)
+    (tmp_path / "config.yaml").write_text(yaml.safe_dump(raw))
+    cfg = Config(tmp_path / "config.yaml")
+    rng = np.random.default_rng(0)
+    n = 60
+    df = pd.DataFrame({"subject_id": [f"OAS1_{i:04d}" for i in range(n)], "label": np.tile([0, 1], n // 2)})
+    df["session_id"] = df.subject_id + "_MR1"
+    df["image_path"] = "unused.hdr"
+    df["age"] = rng.integers(60, 90, n)
+    df["cdr"] = df.label * 0.5
+    df = make_splits(df, 42, 0.2, 5)
+    df.to_csv(cfg.out("participants.csv"), index=False)
+    for enc, d in (("cnn", 512), ("vit", 768)):
+        for sid, y in zip(df.subject_id, df.label):
+            f = rng.normal(size=(16, d)).astype(np.float32)
+            f[:, :5] += y  # weak synthetic signal
+            np.savez(cfg.out("features", enc, f"{sid}.npz"), features=f, config_hash=cfg.feature_hash(enc))
+    return cfg
+
+
+def test_train_evaluate_end_to_end_and_lock(synthetic_run):
+    cfg = synthetic_run
+    table = train(cfg, "review")
+    assert set(table.name) == {"cnn_16", "vit_16", "fusion_16", "age_only"}
+    with pytest.raises(SystemExit):
+        train(cfg, "review")  # locked
+    metrics = evaluate(cfg)
+    assert len(metrics) == 4 and metrics.roc_auc.between(0, 1).all()
+    assert (cfg.out("results", "paired_auc_differences.csv")).exists()
+    with pytest.raises(SystemExit):
+        evaluate(cfg)  # evaluate runs once
+    cfg.out("participants.csv").write_text(cfg.out("participants.csv").read_text() + "\n")
+    with pytest.raises(SystemExit):
+        check_lock(cfg)  # edited manifest is rejected
 
 
 def test_model_input():

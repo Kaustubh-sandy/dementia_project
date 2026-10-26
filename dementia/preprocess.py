@@ -44,7 +44,37 @@ def extract_slices(vol: np.ndarray, indices, axis: int, rot90_k: int = 0) -> np.
 def load_slices(path, cfg, indices=None) -> np.ndarray:
     """MRI path -> normalised axial slices in [0,1] (default: all 16 configured indices)."""
     vol = normalise_volume(load_volume(path, cfg["expected_shape"]))
-    return extract_slices(vol, indices or cfg["slice_indices"], cfg["axial_axis"], cfg["rot90_k"])
+    slices = extract_slices(vol, indices or cfg["slice_indices"], cfg["axial_axis"], cfg["rot90_k"])
+    if (np.count_nonzero(slices, axis=(1, 2)) < 100).any():
+        raise ValueError(f"{path}: a selected slice has almost no brain")
+    return slices
+
+
+def audit(cfg, split: str = "dev") -> None:
+    """Label-blind check that every participant's scan loads and gives 16 usable slices. Never drops anyone."""
+    import pandas as pd
+
+    from dementia.data import load_participants
+
+    if split == "test":
+        from dementia.train import check_lock
+
+        check_lock(cfg)
+    rows = []
+    for i, row in enumerate(load_participants(cfg, split).itertuples()):
+        try:
+            slices = load_slices(row.image_path, cfg)
+            if i < 5:
+                save_montage(slices, cfg["slice_indices"], cfg.out("qc", f"{row.subject_id}.png"), row.subject_id)
+            rows.append({"subject_id": row.subject_id, "passed": True, "error": ""})
+        except Exception as e:
+            rows.append({"subject_id": row.subject_id, "passed": False, "error": str(e)})
+    report = pd.DataFrame(rows)
+    report.to_csv(cfg.out("qc", f"audit_{split}.csv"), index=False)
+    print(f"[audit {split}] {int(report.passed.sum())}/{len(report)} passed; montages in {cfg.out('qc')}")
+    if not report.passed.all():
+        print(report[~report.passed].to_string(index=False))
+        raise SystemExit("Audit failures: inspect these scans; do not silently drop participants.")
 
 
 def to_model_input(slices: np.ndarray, size: int = 224):

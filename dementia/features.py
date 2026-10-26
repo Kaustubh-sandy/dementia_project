@@ -5,11 +5,10 @@ import time
 
 import numpy as np
 
-from dementia.config import FEATURE_DIMS
+from dementia.config import ENCODERS_FOR, FEATURE_DIMS
 from dementia.data import load_participants
 from dementia.preprocess import load_slices, to_model_input
 
-ENCODERS_FOR = {"cnn": ["cnn"], "vit": ["vit"], "fusion": ["cnn", "vit"]}
 _MODELS: dict = {}
 
 
@@ -55,8 +54,10 @@ def _cache_ok(path, cfg, encoder) -> bool:
 
 def extract(cfg, encoder: str, split: str = "dev", limit: int | None = None) -> None:
     """Cache 16-slice features for every participant in `split`. Safe to interrupt and rerun."""
-    if split == "test" and not cfg.out("models", "lock.json").exists():
-        raise SystemExit("Extract test features only after `train` has locked the models")
+    if split == "test":
+        from dementia.train import check_lock
+
+        check_lock(cfg)  # test features only after the protocol is fixed
     parts = load_participants(cfg, split).head(limit) if limit else load_participants(cfg, split)
     t = time.perf_counter()
     get_encoder(encoder, cfg.device())
@@ -75,6 +76,32 @@ def extract(cfg, encoder: str, split: str = "dev", limit: int | None = None) -> 
         print(f"[extract {encoder}] median {np.median(times):.2f}s per participant")
     else:
         print(f"[extract {encoder}] all {len(parts)} {split} caches already up to date")
+
+
+def doctor(cfg) -> None:
+    """Check the environment: versions, CUDA, and a real forward pass of both pretrained encoders."""
+    import json
+    import platform
+
+    import sklearn
+    import torch
+    import torchvision
+
+    info = {"python": platform.python_version(), "torch": torch.__version__, "torchvision": torchvision.__version__,
+            "sklearn": sklearn.__version__, "numpy": np.__version__, "cuda_available": torch.cuda.is_available(),
+            "device": cfg.device()}
+    if info["device"] == "cuda":
+        info["gpu"] = torch.cuda.get_device_name(0)
+        info["gpu_vram_gb"] = round(torch.cuda.get_device_properties(0).total_memory / 2**30, 2)
+    for enc, dim in FEATURE_DIMS.items():
+        t = time.perf_counter()
+        out = encode(get_encoder(enc, info["device"]), torch.zeros(2, 3, 224, 224), info["device"], 2)
+        assert out.shape == (2, dim) and np.isfinite(out).all(), f"{enc} forward pass failed"
+        info[f"{enc}_check"] = f"ok, {dim}-d features, loaded+ran in {time.perf_counter() - t:.1f}s"
+    cfg.out("environment.json").write_text(json.dumps(info, indent=2))
+    print(json.dumps(info, indent=2))
+    if not info["cuda_available"]:
+        print("Running on CPU. For the GPU, install the CUDA build of torch/torchvision from pytorch.org.")
 
 
 def load_features(cfg, encoder: str, subject_ids) -> np.ndarray:
