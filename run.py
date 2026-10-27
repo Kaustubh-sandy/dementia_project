@@ -12,6 +12,7 @@
     python run.py verify                   # live prediction == cached-feature prediction
     python run.py benchmark                # real per-scan prediction time + peak GPU memory, every model
     python run.py report                   # cost vs AUC table/plots, AUC vs slices, cheapest model, age by class
+    python run.py figures                  # presentation figures: dataset slices, preprocessing, budgets, feature heatmaps
     python run.py predict --image PATH.hdr [--model cnn_16]
 """
 import argparse
@@ -21,7 +22,7 @@ from dementia.config import Config
 
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("step", choices=["doctor", "prepare", "audit", "extract", "train", "evaluate", "verify", "benchmark", "report", "predict"])
+    p.add_argument("step", choices=["doctor", "prepare", "audit", "extract", "train", "evaluate", "verify", "benchmark", "report", "figures", "predict"])
     p.add_argument("--config", default=None, help="default: config.yaml next to run.py")
     p.add_argument("--suite", choices=["review", "full", "cnn"], help="train/extract: override `suite` in config")
     p.add_argument("--encoder", choices=["cnn", "vit"], help="extract: only this encoder (default: all the suite needs)")
@@ -77,6 +78,10 @@ def main():
         from dementia.evaluate import report
 
         report(cfg)
+    elif a.step == "figures":
+        from dementia.figures import figures
+
+        figures(cfg)
     elif a.step == "predict":
         from dementia.predict import load_model, predict_volume
 

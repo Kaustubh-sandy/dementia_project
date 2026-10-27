@@ -164,6 +164,14 @@ def test_full_suite_budget_comparisons_and_report(synthetic_run):
     assert "dev_mannwhitney_p" in rep["age_by_class"]
 
 
+def test_pick_pair_one_per_class_with_closest_age():
+    from dementia.figures import pick_pair
+
+    dev = pd.DataFrame({"subject_id": ["A", "B", "C", "D"], "label": [0, 0, 1, 1], "age": [60, 75, 90, 74]})
+    pair = pick_pair(dev)
+    assert list(pair.label) == [0, 1] and list(pair.subject_id) == ["B", "D"]
+
+
 def test_model_input():
     torch = pytest.importorskip("torch")
     from dementia.preprocess import to_model_input

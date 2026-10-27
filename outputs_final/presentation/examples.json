@@ -1,0 +1,16 @@
+[
+  {
+    "subject_id": "OAS1_0001",
+    "session_id": "OAS1_0001_MR1",
+    "age": 74,
+    "cdr": 0.0,
+    "label": 0
+  },
+  {
+    "subject_id": "OAS1_0240",
+    "session_id": "OAS1_0240_MR1",
+    "age": 74,
+    "cdr": 0.5,
+    "label": 1
+  }
+]
