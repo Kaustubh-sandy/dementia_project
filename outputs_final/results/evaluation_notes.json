@@ -1,0 +1,13 @@
+{
+  "n_test": 47,
+  "n_cdr_positive": 20,
+  "threshold": 0.5,
+  "selected_model": "vit_16",
+  "bootstrap": "2000 stratified participant resamples, 95% percentile intervals, conditional on the fitted models",
+  "caveats": [
+    "single dataset, no external validation",
+    "comparisons are descriptive, not multiplicity-adjusted",
+    "a CI crossing 0 does not show fusion is better",
+    "CDR group is not a diagnosis"
+  ]
+}

@@ -1,4 +1,6 @@
 """Synthetic-data checks of the pipeline logic. Never report these numbers as project results."""
+import json
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -6,7 +8,7 @@ import yaml
 
 from dementia.config import ROOT, Config
 from dementia.data import make_splits, select_cohort
-from dementia.evaluate import bootstrap_ci, compute_metrics, evaluate, paired_auc_difference
+from dementia.evaluate import bootstrap_ci, compute_metrics, evaluate, paired_auc_difference, report
 from dementia.features import build_matrix, pool
 from dementia.preprocess import extract_slices, normalise_volume
 from dementia.train import check_lock, fit_model, select_best, train
@@ -124,6 +126,7 @@ def test_train_evaluate_end_to_end_and_lock(synthetic_run):
     cfg = synthetic_run
     table = train(cfg, "review")
     assert set(table.name) == {"cnn_16", "vit_16", "fusion_16", "age_only"}
+    assert (table.fit_s > 0).all() and (table.refit_s > 0).all()
     with pytest.raises(SystemExit):
         train(cfg, "review")  # locked
     metrics = evaluate(cfg)
@@ -134,6 +137,31 @@ def test_train_evaluate_end_to_end_and_lock(synthetic_run):
     cfg.out("participants.csv").write_text(cfg.out("participants.csv").read_text() + "\n")
     with pytest.raises(SystemExit):
         check_lock(cfg)  # edited manifest is rejected
+
+
+def test_full_suite_budget_comparisons_and_report(synthetic_run):
+    cfg = synthetic_run
+    table = train(cfg, "full")
+    assert len(table) == 10  # 3 representations x 3 budgets + age_only
+    budgets = pd.read_csv(cfg.out("results", "dev_budget_table.csv"), index_col=0)
+    assert budgets.shape == (3, 3)
+    evaluate(cfg)
+    diffs = pd.read_csv(cfg.out("results", "paired_auc_differences.csv"))
+    assert set(diffs.comparison) == {"representation", "budget"}
+    assert {("cnn_16", "cnn_4"), ("fusion_16", "fusion_8")} <= set(zip(diffs.model_a, diffs.model_b))
+
+    # Fake measured cost: more slices and more encoders cost more. report must not need torch.
+    mri = table[table.representation != "age"]
+    cost = mri.budget * mri.representation.map({"cnn": 1.0, "vit": 2.0, "fusion": 3.0}) / 100
+    pd.DataFrame({"model": mri.name, "representation": mri.representation, "budget": mri.budget, "device": "cpu",
+                  "warm_total_s": cost, "warm_encode_s": cost, "peak_gpu_mb": np.nan, "cold_total_s": cost + 1}).to_csv(
+        cfg.out("results", "timings_summary.csv"), index=False)
+    out = report(cfg)
+    assert len(out) == 10 and cfg.out("results", "cost_vs_auc.png").exists() and cfg.out("results", "auc_vs_slices.png").exists()
+    rep = json.loads(cfg.out("results", "report.json").read_text())
+    kept = mri[mri.cv_auc >= mri.cv_auc.max() - cfg["retain_margin"]]
+    assert rep["cheapest_retaining_model"] == kept.name.iloc[int(np.argmin(cost[kept.index]))]
+    assert "dev_mannwhitney_p" in rep["age_by_class"]
 
 
 def test_model_input():

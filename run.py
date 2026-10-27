@@ -5,12 +5,13 @@
     python run.py audit                    # every dev scan loads and gives 16 usable slices (+ montages)
     python run.py extract --limit 2        # pilot: seconds per participant
     python run.py extract                  # cache dev features for the encoders the suite needs
-    python run.py train [--suite review|full|cnn]   # CV-tune + fit all models, then lock
+    python run.py train [--suite full|review|cnn]   # CV-tune + fit all models (+ fit time), then lock
     python run.py audit --split test
     python run.py extract --split test     # test features (only after train)
     python run.py evaluate                 # one-shot held-out evaluation
     python run.py verify                   # live prediction == cached-feature prediction
-    python run.py benchmark                # real per-scan prediction time
+    python run.py benchmark                # real per-scan prediction time + peak GPU memory, every model
+    python run.py report                   # cost vs AUC table/plots, AUC vs slices, cheapest model, age by class
     python run.py predict --image PATH.hdr [--model cnn_16]
 """
 import argparse
@@ -20,13 +21,14 @@ from dementia.config import Config
 
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("step", choices=["doctor", "prepare", "audit", "extract", "train", "evaluate", "verify", "benchmark", "predict"])
+    p.add_argument("step", choices=["doctor", "prepare", "audit", "extract", "train", "evaluate", "verify", "benchmark", "report", "predict"])
     p.add_argument("--config", default=None, help="default: config.yaml next to run.py")
     p.add_argument("--suite", choices=["review", "full", "cnn"], help="train/extract: override `suite` in config")
     p.add_argument("--encoder", choices=["cnn", "vit"], help="extract: only this encoder (default: all the suite needs)")
     p.add_argument("--split", choices=["dev", "test"], default="dev")
     p.add_argument("--limit", type=int, help="extract: only the first N participants (pilot timing)")
-    p.add_argument("--repeats", type=int, default=3, help="benchmark repeats")
+    p.add_argument("--repeats", type=int, default=3, help="benchmark repeats per participant")
+    p.add_argument("--participants", type=int, default=5, help="benchmark: number of dev scans to time")
     p.add_argument("--image", help="predict: path to *_t88_masked_gfc.hdr (its .img must sit beside it)")
     p.add_argument("--model", help="predict: model name, default = selected model")
     a = p.parse_args()
@@ -70,7 +72,11 @@ def main():
     elif a.step == "benchmark":
         from dementia.predict import benchmark
 
-        benchmark(cfg, a.repeats)
+        benchmark(cfg, a.repeats, a.participants)
+    elif a.step == "report":
+        from dementia.evaluate import report
+
+        report(cfg)
     elif a.step == "predict":
         from dementia.predict import load_model, predict_volume
 

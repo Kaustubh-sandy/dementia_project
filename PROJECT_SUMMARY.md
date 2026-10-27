@@ -60,8 +60,9 @@ flowchart TD
 | 5 | `python run.py extract --split test` | Features for the held-out people (only allowed after the lock) | test feature files |
 | 6 | `python run.py evaluate` | Scores every model once on the held-out people | metrics, ROC, confusion matrices (see section 6) |
 | 7 | `python run.py verify` | Live prediction on a scan must equal the prediction from its saved features | `results/prediction_consistency.json` |
-| 8 | `python run.py benchmark` | Times real end-to-end prediction for each model (first run cold, then warm) | `results/timings.csv` |
-| 9 | `streamlit run app.py` | Local web demo | browser page at `http://localhost:8501` |
+| 8 | `python run.py benchmark` | Times real end-to-end prediction for each model on 5 dev scans (first run cold, then warm) and records peak GPU memory | `results/timings.csv`, `results/timings_summary.csv` |
+| 9 | `python run.py report` | Joins accuracy and cost for all configurations; picks the cheapest model that keeps dev performance | `results/cost_vs_auc.csv/png`, `auc_vs_slices.png`, `age_by_class.png`, `report.json` |
+| 10 | `streamlit run app.py` | Local web demo | browser page at `http://localhost:8501` |
 
 ## 5. What is trained and what is not
 | Component | Trained on our data? | Notes |
@@ -73,12 +74,12 @@ flowchart TD
 | Logistic regression | Yes | Class-balanced, L2; C chosen from {0.001, 0.01, 0.1, 1} by CV ROC-AUC |
 | Age-only model | Yes | Baseline for age confounding; never used in the app |
 
-Models trained per suite (set `suite:` in `config.yaml`, default `review`):
+Models trained per suite (set `suite:` in `config.yaml`, default `full` = the 9 configurations of the Review-1 slides):
 
 | Suite | MRI models | Plus |
 |---|---|---|
-| review | cnn_16, vit_16, fusion_16 | age_only |
 | full | cnn, vit, fusion × 4, 8, 16 slices (9 models) | age_only |
+| review | cnn_16, vit_16, fusion_16 | age_only |
 | cnn | cnn_16 | age_only |
 
 ## 6. What you get after running the pipeline
@@ -88,15 +89,20 @@ Everything is written to `dementia_project/outputs/`. Nothing here is uploaded a
 |---|---|
 | `prepare_summary.json` | How many people were included per class and split, and why others were excluded |
 | `qc/*.png`, `qc/audit_*.csv` | Visual proof the slices are correct; pass/fail for every scan |
-| `results/dev_cv_results.csv` | Cross-validated AUC (± spread across folds) for every model on development data; this decides the app model |
+| `results/dev_cv_results.csv` | Cross-validated AUC (± spread across folds) and classifier fit time for every model on development data; this decides the app model |
+| `results/dev_budget_table.csv` | Dev CV AUC as a 3 × 3 grid: representation × 4/8/16 slices |
 | `models/lock.json` | Selected model, suite, and fingerprints of everything that must not change before testing |
 | `results/test_metrics.csv` | **Main result.** For each model on held-out people: ROC-AUC, balanced accuracy, sensitivity, specificity, F1, confusion counts, each with a 95% bootstrap confidence interval |
 | `results/test_roc.png` | ROC curves of all models on one plot |
 | `results/confusion_<model>.png` | Correct and incorrect predictions per class |
-| `results/paired_auc_differences.csv` | **Answers the research question**: AUC of fusion minus CNN, and fusion minus ViT, with a confidence interval. If the interval includes 0, fusion is not shown to be better |
+| `results/paired_auc_differences.csv` | **Answers the research question**: `representation` rows = fusion minus CNN / ViT at each budget; `budget` rows = 16 slices minus 8 or 4 for each representation. Each has a CI; if it includes 0, the difference is not shown |
 | `results/test_predictions.csv` | The score each model gave each held-out person |
 | `results/prediction_consistency.json` | Confirms the app and the evaluated model produce the same score |
-| `results/timings.csv` | Seconds per scan for each model, so accuracy can be weighed against cost |
+| `results/timings_summary.csv` | Median warm seconds per participant, cold time and peak GPU memory (MB) for each model |
+| `results/cost_vs_auc.csv` | **The nine-configuration results table**: dev CV AUC, test AUC with CI, other metrics, fit time, s/participant, GPU memory |
+| `results/cost_vs_auc.png`, `auc_vs_slices.png` | Accuracy vs cost, and accuracy/cost vs number of slices |
+| `results/report.json` | The cheapest configuration that retains performance (chosen on dev), plus age by class |
+| `results/age_by_class.png` | Age distribution of CDR 0 vs CDR > 0 (age is a confounder) |
 | App | Pick a participant or upload a scan; shows the slices, predicted CDR group, model score and time |
 
 ### How to read the results
@@ -104,8 +110,8 @@ Everything is written to `dementia_project/outputs/`. Nothing here is uploaded a
   similarly, the MRI models may mainly be detecting age.
 - **Balanced accuracy, sensitivity, specificity** use a fixed threshold of 0.5 on the model score.
 - **Confidence intervals** will be wide because the test set is small (about 40 people with all discs, 19 with discs 1–6).
-- **The conclusion** comes from `paired_auc_differences.csv` together with `timings.csv`: does fusion improve AUC by enough to
-  justify running two networks?
+- **The conclusion** comes from `paired_auc_differences.csv` together with `cost_vs_auc.csv` / `report.json`: does fusion
+  (or more slices) improve AUC by enough to justify the extra time and memory?
 
 Only numbers from these output files may appear in the report or slides. No accuracy is promised in advance.
 

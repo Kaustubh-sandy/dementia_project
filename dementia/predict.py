@@ -64,25 +64,45 @@ def verify_prediction(cfg, tolerance: float = 1e-4) -> dict:
     return result
 
 
-def benchmark(cfg, repeats: int = 3) -> pd.DataFrame:
-    """Real (uncached) per-scan prediction time for every trained MRI model: one cold run, then warm runs."""
-    path = load_participants(cfg, "dev").image_path.iloc[0]
+def benchmark(cfg, repeats: int = 3, participants: int = 5) -> pd.DataFrame:
+    """Real (uncached) per-scan prediction time and peak GPU memory for every trained MRI model.
+
+    Per model: the first run on the first participant is cold (encoders reloaded), every other run is warm.
+    """
+    dev = load_participants(cfg, "dev").head(participants)
+    if len(dev) * repeats < 2:
+        raise SystemExit("benchmark needs at least 2 runs per model (one cold + warm); raise --repeats or --participants")
     device = cfg.device()
+    if device == "cuda":
+        import torch
+    else:
+        print("[benchmark] running on CPU: peak_gpu_mb is not measured (NaN)")
     rows = []
     for name in mri_models(cfg):
         model = load_model(cfg, name)
-        for r in range(repeats):
-            if r == 0:
-                _MODELS.clear()  # cold run includes loading the encoder(s)
-            t = time.perf_counter()
-            res = predict_volume(path, cfg, model)
-            if device == "cuda":
-                import torch
-
-                torch.cuda.synchronize()
-            rows.append({"model": name, "run": "cold" if r == 0 else "warm", "device": device, "slices": len(res["slice_indices"]),
-                         "total_s": time.perf_counter() - t, "preprocess_s": res["seconds_preprocess"], "encode_s": res["seconds_encode"]})
+        _MODELS.clear()  # the first run of each model includes loading its encoder(s)
+        for p, row in enumerate(dev.itertuples()):
+            for r in range(repeats):
+                if device == "cuda":
+                    torch.cuda.synchronize()
+                    torch.cuda.reset_peak_memory_stats()
+                t = time.perf_counter()
+                res = predict_volume(row.image_path, cfg, model)
+                peak = np.nan
+                if device == "cuda":
+                    torch.cuda.synchronize()
+                    peak = torch.cuda.max_memory_allocated() / 2**20
+                rows.append({"model": name, "representation": model["representation"], "budget": model["budget"],
+                             "subject_id": row.subject_id, "run": "cold" if p == r == 0 else "warm", "device": device,
+                             "slices": len(res["slice_indices"]), "total_s": time.perf_counter() - t,
+                             "preprocess_s": res["seconds_preprocess"], "encode_s": res["seconds_encode"], "peak_gpu_mb": peak})
     df = pd.DataFrame(rows)
     df.to_csv(cfg.out("results", "timings.csv"), index=False)
-    print(df.groupby(["model", "run"])[["total_s", "encode_s"]].median().round(3).to_string())
-    return df
+    warm = df[df.run == "warm"]
+    summary = warm.groupby(["model", "representation", "budget", "device"], as_index=False).agg(
+        warm_total_s=("total_s", "median"), warm_encode_s=("encode_s", "median"), peak_gpu_mb=("peak_gpu_mb", "max"))
+    cold = df[df.run == "cold"].set_index("model").total_s.rename("cold_total_s")
+    summary = summary.join(cold, on="model")
+    summary.to_csv(cfg.out("results", "timings_summary.csv"), index=False)
+    print(summary.round(3).to_string(index=False))
+    return summary

@@ -8,7 +8,7 @@ import numpy as np
 import pandas as pd
 from sklearn.metrics import roc_auc_score, roc_curve
 
-from dementia.data import load_participants
+from dementia.data import age_by_class, load_participants
 from dementia.features import build_matrix, load_features
 from dementia.train import check_lock
 
@@ -76,14 +76,16 @@ def evaluate(cfg) -> pd.DataFrame:
     pd.DataFrame({"subject_id": test.subject_id, "label": y, **{f"score_{k}": v for k, v in scores.items()}}).to_csv(
         cfg.out("results", "test_predictions.csv"), index=False
     )
-    budgets = sorted({x["budget"] for x in experiments if x["representation"] == "fusion"})
+    # Predeclared comparisons: fusion vs each encoder at the same budget, and the largest budget vs each smaller one.
+    budgets = sorted({x["budget"] for x in experiments if x["representation"] != "age"})
+    pairs = [("representation", f"fusion_{b}", f"{o}_{b}") for b in budgets for o in ("cnn", "vit")]
+    pairs += [("budget", f"{r}_{budgets[-1]}", f"{r}_{b}") for r in ("cnn", "vit", "fusion") for b in budgets[:-1]]
     diffs = [
-        {"model_a": f"fusion_{b}", "model_b": f"{o}_{b}", **paired_auc_difference(y, scores[f"fusion_{b}"], scores[f"{o}_{b}"], n_boot, cfg["seed"])}
-        for b in budgets
-        for o in ("cnn", "vit")
-        if f"{o}_{b}" in scores
+        {"comparison": kind, "model_a": a, "model_b": b, **paired_auc_difference(y, scores[a], scores[b], n_boot, cfg["seed"])}
+        for kind, a, b in pairs
+        if a in scores and b in scores
     ]
-    pd.DataFrame(diffs, columns=["model_a", "model_b", "auc_difference", "ci_low", "ci_high"]).to_csv(
+    pd.DataFrame(diffs, columns=["comparison", "model_a", "model_b", "auc_difference", "ci_low", "ci_high"]).to_csv(
         cfg.out("results", "paired_auc_differences.csv"), index=False
     )
     _plot_roc(y, scores, cfg.out("results", "test_roc.png"))
@@ -96,6 +98,89 @@ def evaluate(cfg) -> pd.DataFrame:
     }, indent=2))
     print(table[["model", "roc_auc", "roc_auc_ci_low", "roc_auc_ci_high", "balanced_accuracy", "sensitivity", "specificity"]].round(3).to_string(index=False))
     return table
+
+
+def report(cfg) -> pd.DataFrame:
+    """Join dev CV, held-out metrics and measured cost into one table; pick the cheapest model that retains performance."""
+    results = cfg.out("results")
+    missing = [f for f in ("dev_cv_results.csv", "test_metrics.csv", "timings_summary.csv") if not (results / f).exists()]
+    if missing:
+        raise SystemExit(f"report needs {missing}: run train, evaluate and benchmark first")
+    dev = pd.read_csv(results / "dev_cv_results.csv").reindex(
+        columns=["name", "representation", "budget", "n_features", "best_C", "cv_auc", "cv_auc_std", "fit_s"])
+    test = pd.read_csv(results / "test_metrics.csv").rename(columns={"model": "name"})[
+        ["name", "roc_auc", "roc_auc_ci_low", "roc_auc_ci_high", "balanced_accuracy", "sensitivity", "specificity", "f1"]]
+    cost = pd.read_csv(results / "timings_summary.csv").rename(columns={"model": "name"})[
+        ["name", "device", "warm_total_s", "warm_encode_s", "cold_total_s", "peak_gpu_mb"]]
+    table = dev.merge(test, on="name").merge(cost, on="name", how="left")
+    table.to_csv(results / "cost_vs_auc.csv", index=False)
+
+    # Decided on development CV AUC only; the test AUC of the chosen model is reported, never used to choose.
+    margin = cfg.get("retain_margin", 0.02)
+    mri = table[table.representation != "age"]
+    best = mri.loc[mri.cv_auc.idxmax()]
+    keep = mri[mri.cv_auc >= best.cv_auc - margin].dropna(subset=["warm_total_s"])
+    if keep.empty:
+        raise SystemExit("No timings for the retained models: run `python run.py benchmark`")
+    cheap = keep.sort_values("warm_total_s", kind="stable").iloc[0]
+    summary = {
+        "rule": f"cheapest warm s/participant among MRI models with dev CV AUC >= best - {margin}",
+        "best_dev_model": best["name"], "best_dev_cv_auc": float(best.cv_auc),
+        "cheapest_retaining_model": cheap["name"], "its_dev_cv_auc": float(cheap.cv_auc),
+        "its_warm_s_per_participant": float(cheap.warm_total_s),
+        "its_test_auc": float(cheap.roc_auc), "its_test_auc_ci": [float(cheap.roc_auc_ci_low), float(cheap.roc_auc_ci_high)],
+        "speedup_vs_best_dev_model": float(best.warm_total_s / cheap.warm_total_s) if pd.notna(best.warm_total_s) else None,
+        "age_by_class": age_by_class(load_participants(cfg), results / "age_by_class.png"),
+    }
+    (results / "report.json").write_text(json.dumps(summary, indent=2))
+    _plot_cost_vs_auc(table, cheap["name"], results / "cost_vs_auc.png")
+    _plot_auc_vs_slices(mri, results / "auc_vs_slices.png")
+    print(table[["name", "cv_auc", "roc_auc", "roc_auc_ci_low", "roc_auc_ci_high", "warm_total_s", "peak_gpu_mb", "fit_s"]]
+          .round(3).to_string(index=False))
+    print(json.dumps(summary, indent=2))
+    return table
+
+
+MARKERS = {"cnn": "o", "vit": "s", "fusion": "^"}
+
+
+def _auc_err(df):
+    return [df.roc_auc - df.roc_auc_ci_low, df.roc_auc_ci_high - df.roc_auc]
+
+
+def _plot_cost_vs_auc(table, cheapest, path):
+    plt = _plt()
+    fig, ax = plt.subplots(figsize=(7, 5))
+    for rep, g in table[table.representation != "age"].groupby("representation"):
+        ax.errorbar(g.warm_total_s, g.roc_auc, yerr=_auc_err(g), fmt=MARKERS.get(rep, "o"), capsize=3, label=rep)
+        for r in g.itertuples():
+            ax.annotate(f"{r.budget}", (r.warm_total_s, r.roc_auc), textcoords="offset points", xytext=(6, 4), fontsize=8)
+    age = table[table.representation == "age"]
+    if not age.empty:
+        ax.axhline(age.roc_auc.iloc[0], color="grey", ls="--", lw=1, label="age only")
+    c = table[table.name == cheapest].iloc[0]
+    ax.scatter(c.warm_total_s, c.roc_auc, s=250, facecolors="none", edgecolors="red", label=f"cheapest retaining: {cheapest}")
+    ax.set(xscale="log", xlabel="Warm prediction time per participant (s, log scale)", ylabel="Held-out ROC-AUC (95% CI)",
+           title="Accuracy vs cost (numbers = slices)")
+    ax.legend(fontsize=8)
+    fig.tight_layout()
+    fig.savefig(path, dpi=120)
+    plt.close(fig)
+
+
+def _plot_auc_vs_slices(mri, path):
+    plt = _plt()
+    fig, (a1, a2) = plt.subplots(1, 2, figsize=(10, 4))
+    for rep, g in mri.sort_values("budget").groupby("representation"):
+        a1.errorbar(g.budget, g.roc_auc, yerr=_auc_err(g), marker=MARKERS.get(rep, "o"), capsize=3, label=rep)
+        a2.plot(g.budget, g.warm_total_s, marker=MARKERS.get(rep, "o"), label=rep)
+    budgets = sorted(mri.budget.unique())
+    a1.set(xticks=budgets, xlabel="Slices per participant", ylabel="Held-out ROC-AUC (95% CI)", title="How many slices are needed?")
+    a2.set(xticks=budgets, xlabel="Slices per participant", ylabel="Warm s per participant", title="Cost per slice budget")
+    a1.legend(fontsize=8)
+    fig.tight_layout()
+    fig.savefig(path, dpi=120)
+    plt.close(fig)
 
 
 def _plt():

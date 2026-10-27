@@ -1,0 +1,45 @@
+{
+  "rule": "cheapest warm s/participant among MRI models with dev CV AUC >= best - 0.02",
+  "best_dev_model": "vit_16",
+  "best_dev_cv_auc": 0.830952380952381,
+  "cheapest_retaining_model": "vit_16",
+  "its_dev_cv_auc": 0.830952380952381,
+  "its_warm_s_per_participant": 0.5820139999996172,
+  "its_test_auc": 0.674074074074074,
+  "its_test_auc_ci": [
+    0.5148148148148148,
+    0.8240740740740741
+  ],
+  "speedup_vs_best_dev_model": 1.0,
+  "age_by_class": {
+    "dev_cdr0": {
+      "n": 105,
+      "mean": 68.5,
+      "sd": 13.1,
+      "min": 45.0,
+      "max": 94.0
+    },
+    "dev_cdr_pos": {
+      "n": 80,
+      "mean": 76.8,
+      "sd": 7.4,
+      "min": 62.0,
+      "max": 96.0
+    },
+    "test_cdr0": {
+      "n": 27,
+      "mean": 74.7,
+      "sd": 12.5,
+      "min": 46.0,
+      "max": 91.0
+    },
+    "test_cdr_pos": {
+      "n": 20,
+      "mean": 76.8,
+      "sd": 5.8,
+      "min": 63.0,
+      "max": 84.0
+    },
+    "dev_mannwhitney_p": 1.755950741032206e-05
+  }
+}

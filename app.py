@@ -79,6 +79,11 @@ if evaluated:
         st.dataframe(pd.read_csv(results / "test_metrics.csv"))
         st.image(str(results / "test_roc.png"))
         st.image([str(p) for p in sorted(results.glob("confusion_*.png"))], width=250)
-if (results / "timings.csv").exists():
-    with st.expander("Measured prediction time"):
-        st.dataframe(pd.read_csv(results / "timings.csv").groupby(["model", "run"])[["total_s", "encode_s"]].median())
+if (results / "timings_summary.csv").exists():
+    with st.expander("Measured prediction time and GPU memory"):
+        st.dataframe(pd.read_csv(results / "timings_summary.csv"))
+if (results / "cost_vs_auc.csv").exists():
+    with st.expander("Accuracy vs cost (all configurations)"):
+        st.dataframe(pd.read_csv(results / "cost_vs_auc.csv"))
+        st.image([str(results / "cost_vs_auc.png"), str(results / "auc_vs_slices.png")])
+        st.json((results / "report.json").read_text())

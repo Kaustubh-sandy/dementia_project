@@ -1,0 +1,43 @@
+{
+  "participants": 232,
+  "dev_cdr0": 105,
+  "dev_cdr_pos": 80,
+  "test_cdr0": 27,
+  "test_cdr_pos": 20,
+  "cv_folds": 5,
+  "exclusions": {
+    "age_missing_or_below_min": 184,
+    "cdr_missing_or_invalid": 20
+  },
+  "age_by_class": {
+    "dev_cdr0": {
+      "n": 105,
+      "mean": 68.5,
+      "sd": 13.1,
+      "min": 45.0,
+      "max": 94.0
+    },
+    "dev_cdr_pos": {
+      "n": 80,
+      "mean": 76.8,
+      "sd": 7.4,
+      "min": 62.0,
+      "max": 96.0
+    },
+    "test_cdr0": {
+      "n": 27,
+      "mean": 74.7,
+      "sd": 12.5,
+      "min": 46.0,
+      "max": 91.0
+    },
+    "test_cdr_pos": {
+      "n": 20,
+      "mean": 76.8,
+      "sd": 5.8,
+      "min": 63.0,
+      "max": 84.0
+    },
+    "dev_mannwhitney_p": 1.755950741032206e-05
+  }
+}

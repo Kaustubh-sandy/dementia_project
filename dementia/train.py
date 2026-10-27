@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import time
 from datetime import datetime
 
 import joblib
@@ -72,7 +73,9 @@ def train(cfg, suite: str | None = None) -> pd.DataFrame:
     results = []
     for name, rep, budget, pos in jobs:
         X = dev[["age"]].to_numpy(float) if rep == "age" else build_matrix(rep, pos, feats)
+        t = time.perf_counter()
         search = fit_model(X, y, folds, cfg["C_grid"], cfg["seed"])
+        fit_s = time.perf_counter() - t
         joblib.dump(
             {"name": name, "representation": rep, "budget": budget, "positions": pos, "pipeline": search.best_estimator_},
             cfg.out("models", f"{name}.joblib"),
@@ -88,13 +91,20 @@ def train(cfg, suite: str | None = None) -> pd.DataFrame:
                 "best_C": search.best_params_["clf__C"],
                 "cv_auc": float(search.best_score_),
                 "cv_auc_std": float(search.cv_results_["std_test_score"][i]),
+                "fit_s": fit_s,  # whole C search: grid x folds + final refit
+                "refit_s": float(search.refit_time_),  # final fit on all development participants
             }
         )
-        print(f"[train] {name:10s} CV AUC {results[-1]['cv_auc']:.3f} ± {results[-1]['cv_auc_std']:.3f}  C={results[-1]['best_C']}")
+        print(f"[train] {name:10s} CV AUC {results[-1]['cv_auc']:.3f} ± {results[-1]['cv_auc_std']:.3f}  C={results[-1]['best_C']}  fit {fit_s:.2f}s")
 
     best = select_best(results)
     table = pd.DataFrame(results)
     table.to_csv(cfg.out("results", "dev_cv_results.csv"), index=False)
+    mri = table[table.representation != "age"]
+    budgets = mri.assign(cv=mri.cv_auc.map("{:.3f}".format) + " ± " + mri.cv_auc_std.map("{:.3f}".format))
+    budgets = budgets.pivot(index="representation", columns="budget", values="cv")
+    budgets.to_csv(cfg.out("results", "dev_budget_table.csv"))
+    print(f"\n[train] dev CV AUC by representation x slices:\n{budgets.to_string()}\n")
     cfg.out("models", "experiments.json").write_text(json.dumps(results, indent=2))
     lock.write_text(
         json.dumps(

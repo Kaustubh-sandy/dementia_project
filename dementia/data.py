@@ -104,10 +104,41 @@ def prepare(cfg) -> pd.DataFrame:
         "test_cdr_pos": int(((parts.split == "test") & (parts.label == 1)).sum()),
         "cv_folds": int(parts.fold.max()) + 1,
         "exclusions": pd.Series([r for _, r in excl]).value_counts().to_dict(),
+        "age_by_class": age_by_class(parts, cfg.out("qc", "age_by_class.png")),
     }
     cfg.out("prepare_summary.json").write_text(json.dumps(summary, indent=2))
     print(json.dumps(summary, indent=2))
     return parts
+
+
+def age_by_class(parts: pd.DataFrame, plot_path=None) -> dict:
+    """Descriptive age summary per split and class (age is a known confounder), plus a dev Mann-Whitney U test."""
+    from scipy.stats import mannwhitneyu
+
+    out = {}
+    for (split, label), g in parts.groupby(["split", "label"]):
+        out[f"{split}_{'cdr_pos' if label else 'cdr0'}"] = {
+            "n": len(g), "mean": round(float(g.age.mean()), 1), "sd": round(float(g.age.std()), 1),
+            "min": float(g.age.min()), "max": float(g.age.max()),
+        }
+    dev = parts[parts.split == "dev"]
+    out["dev_mannwhitney_p"] = float(mannwhitneyu(dev.age[dev.label == 0], dev.age[dev.label == 1]).pvalue)
+    if plot_path is not None:
+        import matplotlib
+
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+
+        fig, ax = plt.subplots(figsize=(6, 4))
+        bins = np.arange(parts.age.min() - 0.5, parts.age.max() + 2.5, 2)
+        for label, name in ((0, "CDR 0"), (1, "CDR > 0")):
+            ax.hist(parts.age[parts.label == label], bins=bins, alpha=0.6, label=f"{name} (n={int((parts.label == label).sum())})")
+        ax.set(xlabel="Age (years)", ylabel="Participants", title="Age by class (all included participants)")
+        ax.legend()
+        fig.tight_layout()
+        fig.savefig(plot_path, dpi=120)
+        plt.close(fig)
+    return out
 
 
 def load_participants(cfg, split: str | None = None) -> pd.DataFrame:

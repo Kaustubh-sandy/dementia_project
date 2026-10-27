@@ -38,8 +38,9 @@ All dataset files live in `C:\AUTISM-Project\DATASET\` (one level above this fol
 | StandardScaler + class-balanced L2 logistic regression | Yes; C in {0.001, 0.01, 0.1, 1} chosen by 5-fold CV ROC-AUC on development only, then refit on all development |
 | Age-only logistic regression | Yes, confound baseline |
 
-Suites (`suite:` in config.yaml or `--suite`): **review** = CNN-16, ViT-16, fusion-16 (+ age), **full** = all three at 4/8/16 slices (+ age),
-**cnn** = CNN-16 (+ age). The app uses the model with the best development CV AUC.
+Suites (`suite:` in config.yaml or `--suite`): **full** (default) = CNN, ViT, fusion at 4/8/16 slices = the 9 configurations (+ age),
+**review** = the three at 16 slices only (+ age), **cnn** = CNN-16 (+ age). 4 and 8 slices reuse the cached 16-slice features,
+so `full` costs no extra extraction. The app uses the model with the best development CV AUC.
 
 ## Setup (once)
 ```powershell
@@ -58,16 +59,17 @@ python run.py prepare                # outputs/participants.csv, exclusions.csv,
 python run.py audit                  # every dev scan loads; montages in outputs/qc - look at them
 python run.py extract --limit 2      # pilot: prints seconds per participant
 python run.py extract                # dev features for CNN and ViT (resumable)
-python run.py train                  # review suite; outputs/results/dev_cv_results.csv; locks the models
+python run.py train                  # 9 configs + age; dev_cv_results.csv (with fit time), dev_budget_table.csv; locks
 python run.py audit --split test
 python run.py extract --split test   # only allowed after train
 python run.py evaluate               # ONCE: test_metrics.csv, test_roc.png, confusion_*.png, paired_auc_differences.csv
 python run.py verify                 # live prediction must equal cached-feature prediction
-python run.py benchmark              # outputs/results/timings.csv
+python run.py benchmark              # timings.csv + timings_summary.csv: s/participant and peak GPU MB, every model
+python run.py report                 # cost_vs_auc.csv/png, auc_vs_slices.png, age_by_class.png, report.json
 streamlit run app.py                 # demo at http://localhost:8501
 ```
 Single scan: `python run.py predict --image "<path to *_t88_masked_gfc.hdr>"`.
-Full slice-budget study: `python run.py train --suite full` instead of `train` (same features, decide before evaluating).
+`report` picks the cheapest model whose dev CV AUC is within `retain_margin` (0.02) of the best; the test AUC is only reported.
 
 ## Rules the code enforces
 - Split by participant; the scaler is fitted inside each CV training fold.
