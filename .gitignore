@@ -4,6 +4,8 @@ outputs/
 *.img
 *.npz
 *.joblib
+# exception: the small fitted classifiers (scaler + logistic regression, no image data) are shared
+!outputs_final/models/*.joblib
 *.xlsx
 *.tar.gz
 # python
