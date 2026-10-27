@@ -9,8 +9,9 @@ import json
 import numpy as np
 import pandas as pd
 
+from dementia.config import ENCODERS_FOR, FEATURE_DIMS
 from dementia.data import load_participants
-from dementia.features import load_features
+from dementia.features import build_matrix, load_features
 from dementia.preprocess import IMAGENET_MEAN, IMAGENET_STD, extract_slices, load_volume, normalise_volume, to_model_input
 
 GROUP = {0: "CDR 0", 1: "CDR > 0"}
@@ -175,13 +176,81 @@ def feature_figures(cfg, pair, dev, out):
     pd.DataFrame(table).round(4).to_csv(out / "features_table.csv", index=False)
 
 
+def top_weights(w: np.ndarray, k: int = 10) -> np.ndarray:
+    """Indices of the k most positive weights (largest first) followed by the k most negative (most negative last)."""
+    order = np.argsort(w)
+    return np.concatenate([order[::-1][:k], order[:k][::-1]])
+
+
+def simple_features(cfg, dev, out, model_name: str = "fusion_16", k: int = 10):
+    """The few features the trained classifier weighs most, and how they differ between the two groups."""
+    import joblib
+
+    path = cfg.out("models", f"{model_name}.joblib")
+    if not path.exists():
+        from dementia.train import check_lock
+
+        path = cfg.out("models", f"{check_lock(cfg)['selected']}.joblib")
+    m = joblib.load(path)
+    encoders = ENCODERS_FOR[m["representation"]]
+    X = build_matrix(m["representation"], m["positions"], {e: load_features(cfg, e, dev.subject_id) for e in encoders})
+    Z = m["pipeline"].named_steps["scale"].transform(X)  # exactly what the logistic regression sees
+    w = m["pipeline"].named_steps["clf"].coef_[0]
+    score = m["pipeline"].predict_proba(X)[:, 1]
+
+    names, encs = [], []
+    for e in encoders:
+        names += [f"{'CNN' if e == 'cnn' else 'ViT'} #{i}" for i in range(FEATURE_DIMS[e])]
+        encs += [e] * FEATURE_DIMS[e]
+    top = top_weights(w, k)
+    y = dev.label.to_numpy()
+    mean0, mean1 = Z[y == 0][:, top].mean(0), Z[y == 1][:, top].mean(0)
+    labels = [names[i] for i in top]
+
+    plt = _plt()
+    fig, (a, b, c) = plt.subplots(1, 3, figsize=(17, 7), gridspec_kw={"width_ratios": [1, 0.7, 1.4]})
+    # A. weights
+    ypos = np.arange(len(top))[::-1]
+    a.barh(ypos, w[top], color=["tab:red" if v > 0 else "tab:blue" for v in w[top]])
+    a.set_yticks(ypos, labels, fontsize=8)
+    a.axvline(0, color="black", lw=0.8)
+    a.set(xlabel="classifier weight", title="A. What the model uses\nred: pushes towards CDR > 0, blue: towards CDR 0")
+    # B. group means (columns of the heatmap = rows of A, top to bottom)
+    im = b.imshow(np.vstack([mean0, mean1]).T, cmap="RdBu_r", vmin=-1, vmax=1, aspect="auto")
+    b.set_xticks([0, 1], [f"CDR 0\n(n={(y == 0).sum()})", f"CDR > 0\n(n={(y == 1).sum()})"])
+    b.set_yticks(range(len(top)), labels, fontsize=8)
+    for i in range(len(top)):
+        for j, v in enumerate((mean0[i], mean1[i])):
+            b.text(j, i, f"{v:+.2f}", ha="center", va="center", fontsize=7)
+    b.set_title("B. Group averages\n(z-score; red = above average)")
+    fig.colorbar(im, ax=b, fraction=0.05)
+    # C. every development participant, grouped by class, sorted by model score
+    rows = np.concatenate([np.flatnonzero(y == 0)[np.argsort(score[y == 0])], np.flatnonzero(y == 1)[np.argsort(score[y == 1])]])
+    c.imshow(Z[rows][:, top], cmap="RdBu_r", vmin=-2, vmax=2, aspect="auto", interpolation="nearest")
+    c.axhline((y == 0).sum() - 0.5, color="black", lw=2)
+    c.set_xticks(range(len(top)), labels, rotation=90, fontsize=7)
+    c.set_yticks([(y == 0).sum() / 2, (y == 0).sum() + (y == 1).sum() / 2], ["CDR 0", "CDR > 0"])
+    c.set_title("C. Every development participant (one row each)")
+    n_vit = sum(encs[i] == "vit" for i in top)
+    fig.suptitle(f"Model {m['name']}: the {len(top)} of {len(w)} features it weighs most "
+                 f"({len(top) - n_vit} CNN, {n_vit} ViT)", fontsize=12)
+    fig.text(0.5, -0.02, f"Each feature is one of the {len(w)} numbers the frozen networks produce per participant "
+             "(mean over slices). Development participants only; descriptive, not a test result.", ha="center", fontsize=9)
+    _save(fig, out / "features_simple.png")
+
+    pd.DataFrame({"feature": labels, "encoder": [encs[i] for i in top], "weight": w[top], "mean_z_cdr0": mean0,
+                  "mean_z_cdr_pos": mean1, "difference": mean1 - mean0}).round(4).to_csv(out / "features_simple.csv", index=False)
+    print(f"[figures] {m['name']}: top {len(top)} features = {len(top) - n_vit} CNN + {n_vit} ViT")
+
+
 NOTES = """Figures for the guide (development participants only; descriptive, not results).
+features_simple.png           START HERE for features: the 20 features the classifier weighs most, and how CDR 0 vs CDR > 0 differ on them
 mri_examples.png              the 16 axial slices the model uses, one CDR 0 and one CDR > 0 participant of similar age
 mri_examples_middle.png       one larger slice (axial 89) for the same two people
 preprocessing_before_after.png raw voxels -> brain-normalised [0,1] -> 224x224 model input, with intensity histograms
 slice_budgets.png             which slices the 4 / 8 / 16 budgets use, with their levels on a sagittal view
-features_cnn_heatmap.png      frozen ResNet-18 output: 16 slices x 512 numbers per person (z-scored per feature)
-features_vit_heatmap.png      frozen ViT-B/16 output: 16 slices x 768 numbers per person (z-scored per feature)
+features_cnn_heatmap.png      (raw view, optional) frozen ResNet-18 output: 16 slices x 512 numbers per person
+features_vit_heatmap.png      (raw view, optional) frozen ViT-B/16 output: 16 slices x 768 numbers per person
 features_pooled.png           mean over slices, CNN 512 + ViT 768 = the 1280-number fusion vector the classifier gets
 features_pca.png              all development participants' fusion vectors in 2-D (PCA), coloured by CDR group
 features_table.csv            shapes and summary numbers of the pooled vectors for the two example people
@@ -198,6 +267,7 @@ def figures(cfg) -> None:
     preprocessing(cfg, pair.iloc[1], out)
     slice_budgets(cfg, pair.iloc[1], vols[1], out)
     feature_figures(cfg, pair, dev, out)
+    simple_features(cfg, dev, out)
     (out / "README.txt").write_text(NOTES)
     ex = pair[["subject_id", "session_id", "age", "cdr", "label"]].to_dict("records")
     (out / "examples.json").write_text(json.dumps(ex, indent=2, default=float))

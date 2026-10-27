@@ -172,6 +172,13 @@ def test_pick_pair_one_per_class_with_closest_age():
     assert list(pair.label) == [0, 1] and list(pair.subject_id) == ["B", "D"]
 
 
+def test_top_weights_most_positive_then_most_negative():
+    from dementia.figures import top_weights
+
+    w = np.array([0.5, -2.0, 3.0, -0.1, 1.0, -1.0])
+    assert list(top_weights(w, 2)) == [2, 4, 5, 1]
+
+
 def test_model_input():
     torch = pytest.importorskip("torch")
     from dementia.preprocess import to_model_input
